@@ -655,7 +655,10 @@ impl DispatchCommand {
             )
             .await;
 
-            debug!("OBS reconnected before running the command: {}", reconnected);
+            debug!(
+                "OBS reconnected before running the command: {}",
+                reconnected
+            );
         }
 
         match action {
