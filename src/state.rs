@@ -92,6 +92,7 @@ pub struct BroadcastingSoftwareState {
     connected_notifier: Arc<Notify>,
     start_streaming_notifier: Arc<Notify>,
     switch_scene_notifier: Arc<Notify>,
+    reconnect_notifier: Arc<Notify>,
 }
 
 impl BroadcastingSoftwareState {
@@ -105,6 +106,11 @@ impl BroadcastingSoftwareState {
 
     pub fn switch_scene_notifier(&self) -> Arc<Notify> {
         self.switch_scene_notifier.clone()
+    }
+
+    /// Notified to make a pending reconnect attempt happen right away.
+    pub fn reconnect_notifier(&self) -> Arc<Notify> {
+        self.reconnect_notifier.clone()
     }
 }
 
@@ -131,6 +137,7 @@ impl Default for BroadcastingSoftwareState {
             connected_notifier: Arc::new(Notify::new()),
             start_streaming_notifier: Arc::new(Notify::new()),
             switch_scene_notifier: Arc::new(Notify::new()),
+            reconnect_notifier: Arc::new(Notify::new()),
             last_stream_started_at: std::time::Instant::now(),
             stream_status: None,
             initial_stream_status: None,

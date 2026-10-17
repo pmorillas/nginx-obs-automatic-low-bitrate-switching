@@ -791,6 +791,13 @@ impl InnerConnection {
     /// will be reached of 32 seconds.
     async fn get_client(&self) -> obws::Client {
         let mut retry_grow = 1;
+        let reconnect = {
+            self.state
+                .read()
+                .await
+                .broadcasting_software
+                .reconnect_notifier()
+        };
 
         loop {
             info!("Connecting");
@@ -819,10 +826,17 @@ impl InnerConnection {
 
             let wait = 1 << retry_grow;
             info!("trying to connect again in {} seconds", wait);
-            time::sleep(Duration::from_secs(wait)).await;
 
-            if retry_grow < 5 {
-                retry_grow += 1;
+            tokio::select! {
+                _ = time::sleep(Duration::from_secs(wait)) => {
+                    if retry_grow < 5 {
+                        retry_grow += 1;
+                    }
+                }
+                _ = reconnect.notified() => {
+                    info!("Reconnect requested, trying to connect now");
+                    retry_grow = 1;
+                }
             }
         }
     }
