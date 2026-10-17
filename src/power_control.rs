@@ -1,5 +1,6 @@
 use std::{
     fmt,
+    future::Future,
     sync::{Arc, Weak},
     time::Duration,
 };
@@ -24,6 +25,11 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
 const WATCH_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const DEFAULT_COOLDOWN_SECS: u64 = 60;
+
+/// How long a command waits for OBS to reconnect when the API reports it on.
+pub const RECONNECT_WAIT: Duration = Duration::from_secs(15);
+/// How often the connection is checked during [`RECONNECT_WAIT`].
+pub const RECONNECT_POLL: Duration = Duration::from_millis(500);
 
 /// Optional HTTP API that can power the broadcasting software on.
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -526,6 +532,27 @@ pub fn watcher_step(
 /// Whether the broadcasting software should retry connecting right away.
 pub fn should_nudge(status: &PowerStatus, obs_connected: bool) -> bool {
     status.power == Power::On && !obs_connected
+}
+
+/// Calls `check` every `interval` until it returns true or `timeout` passes.
+pub async fn wait_until<F, Fut>(timeout: Duration, interval: Duration, mut check: F) -> bool
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = bool>,
+{
+    let deadline = Instant::now() + timeout;
+
+    loop {
+        if check().await {
+            return true;
+        }
+
+        if Instant::now() >= deadline {
+            return false;
+        }
+
+        time::sleep(interval).await;
+    }
 }
 
 #[derive(Default)]
@@ -1231,6 +1258,41 @@ mod tests {
         assert!(!should_nudge(&status(Power::On), true));
         assert!(!should_nudge(&status(Power::Starting), false));
         assert!(!should_nudge(&status(Power::Off), false));
+    }
+
+    #[tokio::test]
+    async fn wait_until_stops_when_check_passes() {
+        let mut calls = 0;
+        let started = Instant::now();
+        let ok = wait_until(Duration::from_secs(5), Duration::from_millis(10), || {
+            calls += 1;
+            let done = calls >= 3;
+            async move { done }
+        })
+        .await;
+
+        assert!(ok);
+        assert_eq!(calls, 3);
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[tokio::test]
+    async fn wait_until_gives_up_after_timeout() {
+        let mut calls = 0;
+        let started = Instant::now();
+        let ok = wait_until(
+            Duration::from_millis(100),
+            Duration::from_millis(20),
+            || {
+                calls += 1;
+                async { false }
+            },
+        )
+        .await;
+
+        assert!(!ok);
+        assert!(calls >= 2);
+        assert!(started.elapsed() >= Duration::from_millis(100));
     }
 
     #[test]

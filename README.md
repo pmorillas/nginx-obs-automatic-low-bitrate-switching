@@ -830,6 +830,7 @@ While NOALBS is not connected to OBS:
 - `!stop` cancels that automatic start while OBS is still powering on
 - Other commands that need OBS (`!switch`, `!live`, `!fix`, `!record`, ...) answer that OBS is off and how to power it on
 - `!obs on` powers OBS on without starting the stream and `!obs status` shows its power state
+- If your API reports OBS as already on, NOALBS gives the OBS connection up to 15 seconds to come back before running the command as usual
 
 > `!obs` is an Admin command by default. Like any other command, its permission can be changed in `commands` with the `Obs` key.
 

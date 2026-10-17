@@ -632,6 +632,7 @@ impl DispatchCommand {
             }
         };
 
+        // The OBS client may still be in its reconnect backoff right after OBS came up
         if power_control::should_nudge(&status, false) {
             self.user
                 .state
@@ -640,6 +641,15 @@ impl DispatchCommand {
                 .broadcasting_software
                 .reconnect_notifier()
                 .notify_one();
+
+            let connected = power_control::wait_until(
+                power_control::RECONNECT_WAIT,
+                power_control::RECONNECT_POLL,
+                || self.obs_connected(),
+            )
+            .await;
+
+            debug!("OBS reconnected before running the command: {}", connected);
         }
 
         match power_control::gate(kind, &status) {
