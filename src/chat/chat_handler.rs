@@ -265,19 +265,11 @@ impl ChatHandler {
 
         let message = msg.message.strip_prefix(prefix)?;
         let mut message = message.split_ascii_whitespace();
-        let mut command = super::Command::from(message.next()?);
+        let mut command = parse_command(message.next()?, &state.config);
 
-        // `obs` could be used as an alias before it became a command, keep that working
-        // for users without power control
-        let alias = match command {
-            super::Command::Unknown(ref cmd) => Some(cmd.as_str()),
-            super::Command::Obs if user.power_control.is_none() => Some("obs"),
-            _ => None,
-        };
-
-        if let Some(alias) = alias
+        if let super::Command::Unknown(ref cmd) = command
             && let Some(cmd_from_alias) =
-                try_get_command_from_alias(&chat.commands, &self.default_commands, alias)
+                try_get_command_from_alias(&chat.commands, &self.default_commands, cmd)
         {
             command = cmd_from_alias;
         }
@@ -439,6 +431,16 @@ impl ChatHandler {
         }
 
         false
+    }
+}
+
+/// Parses a command name; `obs` is only a command when the config has a `powerControl` section.
+fn parse_command(name: &str, config: &config::Config) -> chat::Command {
+    match chat::Command::from(name) {
+        chat::Command::Obs if config.power_control.is_none() => {
+            chat::Command::Unknown(name.to_lowercase())
+        }
+        command => command,
     }
 }
 
@@ -836,7 +838,7 @@ impl DispatchCommand {
             return;
         }
 
-        let command = super::Command::from(a2);
+        let command = parse_command(a2, &self.user.state.read().await.config);
 
         if let chat::Command::Unknown(_) = command {
             self.send(t!("alias.errorCommand", locale = &self.lang, command = a2))

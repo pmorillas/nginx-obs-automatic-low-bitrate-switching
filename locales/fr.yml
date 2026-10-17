@@ -120,5 +120,5 @@ power:
     cooldown: Attends %{seconds} s avant de rallumer OBS
     unavailable: OBS n'est pas disponible pour le moment, vérifie le tableau de bord
     error: Impossible de vérifier l'état d'OBS pour le moment
-    notConfigured: Le contrôle d'allumage d'OBS n'est pas configuré
+    notConfigured: Le contrôle d'allumage d'OBS n'est pas bien configuré, vérifie les logs de NOALBS
     obsUsage: "Utilisation : %{prefix}obs on | %{prefix}obs status"

@@ -120,5 +120,5 @@ power:
     cooldown: Espera %{seconds} s antes de volver a encender el OBS
     unavailable: El OBS no está disponible ahora mismo, revisa el panel
     error: No se ha podido comprobar el estado del OBS ahora mismo
-    notConfigured: El control de encendido del OBS no está configurado
+    notConfigured: El control de encendido del OBS no está bien configurado, revisa los logs de NOALBS
     obsUsage: "Uso: %{prefix}obs on | %{prefix}obs status"

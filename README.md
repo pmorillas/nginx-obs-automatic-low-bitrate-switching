@@ -832,7 +832,7 @@ While NOALBS is not connected to OBS:
 - `!obs on` powers OBS on without starting the stream and `!obs status` shows its power state
 - If your API reports OBS as already on, NOALBS gives the OBS connection up to 15 seconds to come back before running the command as usual
 
-> `!obs` is an Admin command by default. Like any other command, its permission can be changed in `commands` with the `Obs` key.
+> `!obs` is an Admin command by default and only exists when `powerControl` is set. Like any other command, its permission can be changed in `commands` with the `Obs` key.
 
 <details>
 <summary>Click to view the HTTP API NOALBS expects</summary>

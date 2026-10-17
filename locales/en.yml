@@ -120,5 +120,5 @@ power:
     cooldown: Wait %{seconds} s before powering OBS on again
     unavailable: OBS isn't available right now, check the dashboard
     error: Couldn't check the OBS power state right now
-    notConfigured: OBS power control is not configured
+    notConfigured: OBS power control isn't set up correctly, check the NOALBS logs
     obsUsage: "Usage: %{prefix}obs on | %{prefix}obs status"
