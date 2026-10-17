@@ -49,6 +49,7 @@ pub enum Command {
     StartingScene,
     EndingScene,
     PrivacyScene,
+    Obs,
     Unknown(String),
 
     // Internal only
@@ -89,6 +90,8 @@ impl From<&str> for Command {
             "privacy" => Command::PrivacyScene,
             "starting" => Command::StartingScene,
             "ending" => Command::EndingScene,
+
+            "obs" => Command::Obs,
 
             // "host" => Ok(Command::Host),
             // "unhost" => Ok(Command::Unhost),

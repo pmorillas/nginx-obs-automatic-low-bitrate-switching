@@ -6,9 +6,13 @@ use rust_i18n::t;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tokio::time;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::chat::{self, HandleMessage, OptionalScene, Permission};
+use crate::power_control::{
+    self, GateAction, Goal, Notice, PowerControl, WakeOutcome, WakeResponse, WatchContext,
+};
+use crate::state::ClientStatus;
 use crate::{Noalbs, config, error, events, switcher, user_manager};
 
 pub struct ChatHandler {
@@ -263,9 +267,17 @@ impl ChatHandler {
         let mut message = message.split_ascii_whitespace();
         let mut command = super::Command::from(message.next()?);
 
-        if let super::Command::Unknown(ref cmd) = command
+        // `obs` could be used as an alias before it became a command, keep that working
+        // for users without power control
+        let alias = match command {
+            super::Command::Unknown(ref cmd) => Some(cmd.as_str()),
+            super::Command::Obs if user.power_control.is_none() => Some("obs"),
+            _ => None,
+        };
+
+        if let Some(alias) = alias
             && let Some(cmd_from_alias) =
-                try_get_command_from_alias(&chat.commands, &self.default_commands, cmd)
+                try_get_command_from_alias(&chat.commands, &self.default_commands, alias)
         {
             command = cmd_from_alias;
         }
@@ -525,6 +537,10 @@ pub struct DispatchCommand {
 
 impl DispatchCommand {
     pub async fn run_command(&self) {
+        if self.power_gate().await {
+            return;
+        }
+
         let mut params = {
             // Unwrap is safe here because the command was already parsed
             let state = self.user.state.read().await;
@@ -590,7 +606,177 @@ impl DispatchCommand {
                 self.stop_on_raid(target_info.to_owned()).await;
             }
             chat::Command::Collection => self.collection(params.next()).await,
+            chat::Command::Obs => self.obs(params.next()).await,
         };
+    }
+
+    /// Answers commands that need OBS while it is not connected; returns true when handled.
+    async fn power_gate(&self) -> bool {
+        let Some(power) = &self.user.power_control else {
+            return false;
+        };
+
+        let Some(kind) = power_control::GatedCommand::from_command(&self.command) else {
+            return false;
+        };
+
+        if self.obs_connected().await {
+            return false;
+        }
+
+        let status = match power.client().status().await {
+            Ok(status) => status,
+            Err(e) => {
+                warn!("Power control status unavailable: {}", e);
+                return false;
+            }
+        };
+
+        if power_control::should_nudge(&status, false) {
+            self.user
+                .state
+                .read()
+                .await
+                .broadcasting_software
+                .reconnect_notifier()
+                .notify_one();
+        }
+
+        match power_control::gate(kind, &status) {
+            GateAction::Proceed => false,
+            GateAction::Reply(notice) => {
+                self.send_notice(notice).await;
+                true
+            }
+            GateAction::WakeWithStream { queued } => self.wake_with_stream(power, queued).await,
+            GateAction::CancelStart => {
+                self.cancel_start(power).await;
+                true
+            }
+        }
+    }
+
+    async fn wake_with_stream(&self, power: &PowerControl, queued: bool) -> bool {
+        let response = self.wake(power, true).await;
+
+        let notice = match power_control::wake_outcome(response.as_ref()) {
+            WakeOutcome::AlreadyOn => return false,
+            WakeOutcome::Reply(notice) => notice,
+            WakeOutcome::Waking { request_id } => {
+                power
+                    .watch(Goal::Stream { request_id }, self.watch_context().await)
+                    .await;
+
+                if queued {
+                    Notice::StartQueued
+                } else {
+                    Notice::WakingWithStream
+                }
+            }
+        };
+
+        self.send_notice(notice).await;
+        true
+    }
+
+    async fn cancel_start(&self, power: &PowerControl) {
+        let notice = match power.client().cancel_start(&self.chat_message.sender).await {
+            Ok(true) => {
+                power.stop_watching().await;
+                Notice::StartCancelled
+            }
+            Ok(false) => Notice::StartingWait,
+            Err(e) => {
+                warn!("Power control cancel request failed: {}", e);
+                Notice::Error
+            }
+        };
+
+        self.send_notice(notice).await;
+    }
+
+    async fn obs(&self, subcommand: Option<&str>) {
+        let Some(power) = &self.user.power_control else {
+            self.send_notice(Notice::NotConfigured).await;
+            return;
+        };
+
+        let notice = match subcommand.map(str::to_lowercase).as_deref() {
+            None | Some("status") => match power.client().status().await {
+                Ok(status) => power_control::status_notice(&status),
+                Err(e) => {
+                    warn!("Power control status unavailable: {}", e);
+                    Notice::Error
+                }
+            },
+            Some("on") => self.obs_on(power).await,
+            Some(_) => Notice::ObsUsage,
+        };
+
+        self.send_notice(notice).await;
+    }
+
+    async fn obs_on(&self, power: &PowerControl) -> Notice {
+        if self.obs_connected().await {
+            return Notice::AlreadyOn;
+        }
+
+        let response = self.wake(power, false).await;
+
+        match power_control::wake_outcome(response.as_ref()) {
+            WakeOutcome::AlreadyOn => Notice::AlreadyOn,
+            WakeOutcome::Reply(notice) => notice,
+            WakeOutcome::Waking { .. } => {
+                match power
+                    .watch(Goal::PowerOnly, self.watch_context().await)
+                    .await
+                {
+                    Goal::PowerOnly => Notice::Waking,
+                    Goal::Stream { .. } => Notice::StartQueued,
+                }
+            }
+        }
+    }
+
+    async fn wake(&self, power: &PowerControl, start_stream: bool) -> Option<WakeResponse> {
+        power
+            .client()
+            .wake(
+                start_stream,
+                &self.chat_message.sender,
+                &self.chat_message.platform,
+            )
+            .await
+            .inspect_err(|e| warn!("Power control wake request failed: {}", e))
+            .ok()
+    }
+
+    async fn obs_connected(&self) -> bool {
+        self.user.state.read().await.broadcasting_software.status == ClientStatus::Connected
+    }
+
+    async fn watch_context(&self) -> WatchContext {
+        let (prefix, reconnect) = {
+            let state = self.user.state.read().await;
+            (
+                chat_prefix(&state.config),
+                state.broadcasting_software.reconnect_notifier(),
+            )
+        };
+
+        WatchContext {
+            chat_sender: self.chat_sender.clone(),
+            channel: self.chat_message.channel.clone(),
+            lang: self.lang.clone(),
+            prefix,
+            state: Arc::downgrade(&self.user.state),
+            reconnect,
+        }
+    }
+
+    async fn send_notice(&self, notice: Notice) {
+        let prefix = chat_prefix(&self.user.state.read().await.config);
+        self.send(notice.render(&self.lang, &prefix)).await;
     }
 
     async fn alias<'a, I>(&self, args: I)
@@ -1521,6 +1707,14 @@ impl DispatchCommand {
             self.send(t!("collection.note", locale = &self.lang,)).await;
         }
     }
+}
+
+fn chat_prefix(config: &config::Config) -> String {
+    config
+        .chat
+        .as_ref()
+        .map(|c| c.prefix.clone())
+        .unwrap_or_default()
 }
 
 fn condition_to_text(condition: bool, lang: &str) -> String {

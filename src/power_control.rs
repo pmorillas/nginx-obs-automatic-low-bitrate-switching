@@ -909,6 +909,7 @@ mod tests {
 
         for c in [
             Command::Bitrate,
+            Command::Obs,
             Command::Noalbs,
             Command::Trigger,
             Command::Sourceinfo,
