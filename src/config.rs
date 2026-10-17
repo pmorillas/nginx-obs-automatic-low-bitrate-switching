@@ -3,7 +3,7 @@ use std::{collections::HashMap, io::Seek};
 use serde::{Deserialize, Serialize};
 use tracing::{error, info};
 
-use crate::{chat, error, stream_servers, switcher};
+use crate::{chat, error, power_control, stream_servers, switcher};
 
 const MAX_LOW_RETRY: u8 = 5;
 
@@ -22,6 +22,10 @@ pub struct Config {
     /// Defaults to true when not present, for backwards compatibility.
     #[serde(default = "default_log_to_file")]
     pub log_to_file: bool,
+
+    /// Optional HTTP API used to power the broadcasting software on from chat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub power_control: Option<power_control::PowerControlConfig>,
 }
 
 fn default_log_to_file() -> bool {
@@ -429,6 +433,7 @@ impl From<ConfigOld> for Config {
             optional_scenes: OptionalScenes::default(),
             optional_options: OptionalOptions::default(),
             log_to_file: default_log_to_file(),
+            power_control: None,
         };
 
         let commands = config.chat.as_mut().unwrap().commands.as_mut().unwrap();
@@ -614,5 +619,72 @@ fn update_command(
         }
 
         c.alias.as_mut().unwrap().push(alias);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const EXAMPLE: &str = include_str!("../config.json");
+
+    fn with_power_control(power_control: serde_json::Value) -> Config {
+        let mut value: serde_json::Value = serde_json::from_str(EXAMPLE).unwrap();
+        value["powerControl"] = power_control;
+        serde_json::from_value(value).unwrap()
+    }
+
+    #[test]
+    fn config_without_power_control() {
+        let config: Config = serde_json::from_str(EXAMPLE).unwrap();
+        assert!(config.power_control.is_none());
+
+        let saved = serde_json::to_string_pretty(&config).unwrap();
+        assert!(!saved.contains("powerControl"));
+    }
+
+    #[test]
+    fn config_with_power_control() {
+        let config = with_power_control(serde_json::json!({
+            "apiUrl": "http://localhost:8080/power",
+            "token": "secret"
+        }));
+
+        assert_eq!(
+            config.power_control,
+            Some(power_control::PowerControlConfig {
+                api_url: "http://localhost:8080/power".to_string(),
+                token: Some("secret".to_string()),
+            })
+        );
+
+        let saved = serde_json::to_value(&config).unwrap();
+        assert_eq!(
+            saved["powerControl"],
+            serde_json::json!({ "apiUrl": "http://localhost:8080/power", "token": "secret" })
+        );
+    }
+
+    #[test]
+    fn config_with_power_control_without_token() {
+        for power_control in [
+            serde_json::json!({ "apiUrl": "http://localhost:8080/power", "token": null }),
+            serde_json::json!({ "apiUrl": "http://localhost:8080/power" }),
+        ] {
+            let config = with_power_control(power_control);
+            assert_eq!(config.power_control.as_ref().unwrap().token, None);
+
+            let saved = serde_json::to_value(&config).unwrap();
+            assert_eq!(
+                saved["powerControl"],
+                serde_json::json!({ "apiUrl": "http://localhost:8080/power" })
+            );
+        }
+    }
+
+    #[test]
+    fn null_power_control_is_disabled() {
+        let config = with_power_control(serde_json::Value::Null);
+        assert!(config.power_control.is_none());
     }
 }

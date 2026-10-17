@@ -6,6 +6,7 @@ use tracing::{debug, info};
 use crate::{
     broadcasting_software::{BroadcastingSoftwareLogic, obs_v5::Obsv5},
     chat, config, error,
+    power_control::PowerControl,
     state::{self, State},
     stream_servers,
     switcher::{self, Switcher},
@@ -24,6 +25,9 @@ pub struct Noalbs {
     // does this really need to be an option?
     pub switcher_handler: Option<tokio::task::JoinHandle<()>>,
 
+    /// Set when the config has a usable `powerControl` section
+    pub power_control: Option<PowerControl>,
+
     /// Used to save the config
     storage: Box<dyn config::ConfigLogic>,
 }
@@ -35,6 +39,7 @@ impl Noalbs {
     ) -> Result<Self, error::Error> {
         let config = storage.load()?;
         info!("Loaded user: {}", config.user.name);
+        let power_control = PowerControl::from_config(config.power_control.as_ref());
 
         let mut state = State {
             config,
@@ -91,6 +96,7 @@ impl Noalbs {
             state,
             chat_sender,
             switcher_handler: None,
+            power_control,
             storage,
         };
 

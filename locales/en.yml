@@ -95,3 +95,30 @@ streamserver:
     notFound: "Error no stream server found with the name: %{name}"
     successEnabled: Stream server %{name} successfully enabled
     successDisabled: Stream server %{name} successfully disabled
+power:
+    wakingWithStream: Powering OBS on, the stream will start by itself as soon as it's ready (usually a minute or two)
+    startQueued: OBS is already powering on, the stream will start as soon as it's ready
+    waking: Powering OBS on without starting the stream
+    ready: OBS is on and ready, type %{prefix}start to go live. It powers off by itself after %{minutes} min without streaming
+    readyNoIdle: OBS is on and ready, type %{prefix}start to go live
+    live: Stream started
+    startFailed: OBS is on but the stream couldn't be started, try %{prefix}start again
+    startExpired: OBS took too long to get ready and the stream was not started, try %{prefix}start again
+    startCancelled: OK, the stream will not start automatically
+    wakeFailed: Couldn't power OBS on, check the dashboard
+    timeout: OBS is taking too long to power on, check the dashboard
+    offHint: OBS is off. Use %{prefix}start to power it on and go live, or %{prefix}obs on to only power it on
+    offNoWake: OBS is off, power it on from the dashboard
+    stopWhileOff: There is no stream to stop, OBS is off
+    startingWait: OBS is powering on, try again in a moment
+    statusOff: OBS is off
+    statusStarting: OBS is powering on
+    statusStartingWithStream: OBS is powering on, the stream will start as soon as it's ready
+    statusOn: OBS is on
+    statusLive: OBS is on and live
+    alreadyOn: OBS is already on
+    cooldown: Wait %{seconds} s before powering OBS on again
+    unavailable: OBS isn't available right now, check the dashboard
+    error: Couldn't check the OBS power state right now
+    notConfigured: OBS power control is not configured
+    obsUsage: "Usage: %{prefix}obs on | %{prefix}obs status"

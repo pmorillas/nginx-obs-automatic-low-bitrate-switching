@@ -4,6 +4,7 @@ pub mod config;
 pub mod error;
 pub mod events;
 pub mod noalbs;
+pub mod power_control;
 pub mod state;
 pub mod stream_servers;
 pub mod switcher;

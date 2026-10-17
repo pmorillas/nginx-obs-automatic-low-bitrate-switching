@@ -95,3 +95,30 @@ streamserver:
     notFound: "Error no stream server found with the name: %{name}"
     successEnabled: Stream server %{name} successfully enabled
     successDisabled: Stream server %{name} successfully disabled
+power:
+    wakingWithStream: Démarrage d'OBS, le stream se lancera tout seul dès qu'il sera prêt (en général une minute ou deux)
+    startQueued: OBS est déjà en train de démarrer, le stream se lancera dès qu'il sera prêt
+    waking: Démarrage d'OBS sans lancer le stream
+    ready: OBS est allumé et prêt, tape %{prefix}start pour lancer le stream. Il s'éteint tout seul après %{minutes} min sans diffusion
+    readyNoIdle: OBS est allumé et prêt, tape %{prefix}start pour lancer le stream
+    live: Stream lancé
+    startFailed: OBS est allumé mais le stream n'a pas pu être lancé, réessaie avec %{prefix}start
+    startExpired: OBS a mis trop de temps et le stream n'a pas été lancé, réessaie avec %{prefix}start
+    startCancelled: OK, le stream ne se lancera pas automatiquement
+    wakeFailed: Impossible d'allumer OBS, vérifie le tableau de bord
+    timeout: OBS met trop de temps à s'allumer, vérifie le tableau de bord
+    offHint: OBS est éteint. Utilise %{prefix}start pour l'allumer et lancer le stream, ou %{prefix}obs on pour seulement l'allumer
+    offNoWake: OBS est éteint, allume-le depuis le tableau de bord
+    stopWhileOff: Il n'y a aucun stream à arrêter, OBS est éteint
+    startingWait: OBS est en train de démarrer, réessaie dans un instant
+    statusOff: OBS est éteint
+    statusStarting: OBS est en train de démarrer
+    statusStartingWithStream: OBS est en train de démarrer, le stream se lancera dès qu'il sera prêt
+    statusOn: OBS est allumé
+    statusLive: OBS est allumé et en direct
+    alreadyOn: OBS est déjà allumé
+    cooldown: Attends %{seconds} s avant de rallumer OBS
+    unavailable: OBS n'est pas disponible pour le moment, vérifie le tableau de bord
+    error: Impossible de vérifier l'état d'OBS pour le moment
+    notConfigured: Le contrôle d'allumage d'OBS n'est pas configuré
+    obsUsage: "Utilisation : %{prefix}obs on | %{prefix}obs status"

@@ -95,3 +95,30 @@ streamserver:
     notFound: "Error no stream server found with the name: %{name}"
     successEnabled: Stream server %{name} successfully enabled
     successDisabled: Stream server %{name} successfully disabled
+power:
+    wakingWithStream: Encendiendo el OBS, el directo empezará solo en cuanto esté listo (suele tardar un minuto o dos)
+    startQueued: El OBS ya se está encendiendo, el directo empezará en cuanto esté listo
+    waking: Encendiendo el OBS sin empezar el directo
+    ready: El OBS está encendido y listo, escribe %{prefix}start para empezar el directo. Se apaga solo tras %{minutes} min sin emitir
+    readyNoIdle: El OBS está encendido y listo, escribe %{prefix}start para empezar el directo
+    live: Directo iniciado
+    startFailed: El OBS está encendido pero no se ha podido empezar el directo, prueba otra vez con %{prefix}start
+    startExpired: El OBS ha tardado demasiado y el directo no se ha iniciado, prueba otra vez con %{prefix}start
+    startCancelled: Vale, el directo no empezará automáticamente
+    wakeFailed: No se ha podido encender el OBS, revisa el panel
+    timeout: El OBS está tardando demasiado en encenderse, revisa el panel
+    offHint: El OBS está apagado. Usa %{prefix}start para encenderlo y empezar el directo, o %{prefix}obs on para solo encenderlo
+    offNoWake: El OBS está apagado, enciéndelo desde el panel
+    stopWhileOff: No hay ningún directo que parar, el OBS está apagado
+    startingWait: El OBS se está encendiendo, prueba otra vez en un momento
+    statusOff: El OBS está apagado
+    statusStarting: El OBS se está encendiendo
+    statusStartingWithStream: El OBS se está encendiendo, el directo empezará en cuanto esté listo
+    statusOn: El OBS está encendido
+    statusLive: El OBS está encendido y en directo
+    alreadyOn: El OBS ya está encendido
+    cooldown: Espera %{seconds} s antes de volver a encender el OBS
+    unavailable: El OBS no está disponible ahora mismo, revisa el panel
+    error: No se ha podido comprobar el estado del OBS ahora mismo
+    notConfigured: El control de encendido del OBS no está configurado
+    obsUsage: "Uso: %{prefix}obs on | %{prefix}obs status"
