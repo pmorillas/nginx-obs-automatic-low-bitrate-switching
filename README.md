@@ -96,6 +96,7 @@ Do you offer a similar solution or paid service? Want your link here? Message [@
 </details>
 
 - [Depends on](#depends-on)
+- [Power control](#power-control)
 - [Languages](#languages)
 - [Building from source](#building-from-source)
 - [FAQ](#faq)
@@ -142,6 +143,7 @@ NOALBS gives you the option to enable some simple chat commands to help you mana
 |    Admins    | !starting                 | switch to the starting scene.                                                                           | !starting             |
 |    Admins    | !ending                   | switch to the ending scene.                                                                             | !ending               |
 |    Admins    | !streamserver (name)      | Toggles the stream server on or off.                                                                    | !streamserver belabox |
+|    Admins    | !obs (on/status)          | powers OBS on or shows its power state, see [Power control](#power-control).                            | !obs on               |
 |    Admins    | !noalbs prefix (prefix)   | change noalbs command prefix.                                                                           | !noalbs prefix #      |
 |    Admins    | !noalbs retry (value)     | changes the retry value for the switcher.                                                               | !noalbs retry 5       |
 |    Admins    | !noalbs lang (value)      | changes the chat response language.                                                                     | !noalbs lang zh_tw    |
@@ -801,6 +803,80 @@ When a `dependsOn` field is found, monitor the status of the given server. If th
 
 - `name`: The exact name this stream server depends on
 - `backupScenes`: Scenes that will be used when the depended on server is offline
+
+</details>
+
+## Power control
+<details>
+<summary>Click to view the powerControl section</summary>
+
+Optional. If OBS runs on a machine that gets powered off while idle (for example a cloud server), NOALBS can ask an HTTP API of your own to power it on from chat. Without a `powerControl` section NOALBS works exactly as before.
+
+```JSON
+"powerControl": {
+  "apiUrl": "http://localhost:8080/noalbs/power",
+  "token": null
+}
+```
+
+- `apiUrl`: Base URL of your power control API
+- `token`: Bearer token sent with every request. `NOALBS_POWER_TOKEN` in the `.env` file takes precedence over this field, so the token doesn't have to live in `config.json`
+
+> If `powerControl` is set but no token is found, NOALBS logs a warning and power control stays disabled.
+
+While NOALBS is not connected to OBS:
+
+- `!start` powers OBS on, and your API starts the stream once OBS is ready. NOALBS tells chat when the stream is live or if it couldn't be started
+- `!stop` cancels that automatic start while OBS is still powering on
+- Other commands that need OBS (`!switch`, `!live`, `!fix`, `!record`, ...) answer that OBS is off and how to power it on
+- `!obs on` powers OBS on without starting the stream and `!obs status` shows its power state
+
+> `!obs` is an Admin command by default. Like any other command, its permission can be changed in `commands` with the `Obs` key.
+
+<details>
+<summary>Click to view the HTTP API NOALBS expects</summary>
+
+Every request sends `Authorization: Bearer <token>` and `User-Agent: noalbs/<version>`, uses JSON bodies and times out after 10 seconds. A response other than `200`, or a body NOALBS can't read, counts as the API being unreachable and the chat command then runs as if there was no power control.
+
+`GET {apiUrl}/status`
+
+```JSON
+{
+  "power": "off",
+  "wakeEnabled": true,
+  "streaming": null,
+  "pendingStart": null,
+  "lastStart": null,
+  "idleShutdownMinutes": 30
+}
+```
+
+- `power`: `off`, `starting`, `on` or `unavailable`
+- `wakeEnabled`: `false` when OBS can't be powered on from chat
+- `streaming`: `true`, `false` or `null` when unknown
+- `pendingStart`: `{ "requestId": "...", "expiresAt": "<RFC 3339>" }` while a stream start waits for OBS, otherwise `null`
+- `lastStart`: `{ "requestId": "...", "result": "started", "at": "<RFC 3339>" }` or `null`. `result` is one of `started`, `failed`, `expired` or `cancelled`
+- `idleShutdownMinutes`: minutes without streaming after which OBS powers off by itself, or `null`
+
+`POST {apiUrl}/wake` with `{ "startStream": true, "requestedBy": "<chat username>", "platform": "twitch" }` (`platform` is `twitch` or `kick`)
+
+```JSON
+{ "result": "waking", "requestId": "...", "retryAfterSeconds": null }
+```
+
+- `result`: `waking`, `already_on`, `unavailable`, `cooldown` or `disabled`. Asking again while OBS is powering on returns `waking` again
+- `requestId`: identifies the stream start, set when `startStream` is `true` and `result` is `waking`
+- `retryAfterSeconds`: set when `result` is `cooldown`
+
+`POST {apiUrl}/cancel-start` with `{ "requestedBy": "<chat username>" }`
+
+```JSON
+{ "cancelled": true }
+```
+
+> With `startStream: true` your API starts the stream once OBS is ready, NOALBS doesn't start it itself. NOALBS polls `status` every 5 seconds, for up to 15 minutes, to tell chat how it went.
+
+</details>
 
 </details>
 
