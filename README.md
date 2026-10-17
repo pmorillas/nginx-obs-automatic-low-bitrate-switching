@@ -837,7 +837,7 @@ While NOALBS is not connected to OBS:
 <details>
 <summary>Click to view the HTTP API NOALBS expects</summary>
 
-Every request sends `Authorization: Bearer <token>` and `User-Agent: noalbs/<version>`, uses JSON bodies and times out after 10 seconds. A response other than `200`, or a body NOALBS can't read, counts as the API being unreachable and the chat command then runs as if there was no power control.
+Every request sends `Authorization: Bearer <token>` and `User-Agent: noalbs/<version>`, uses JSON bodies and times out after 10 seconds (30 seconds for `wake`). A response other than `200`, or a body NOALBS can't read, counts as the API being unreachable and the chat command then runs as if there was no power control.
 
 `GET {apiUrl}/status`
 

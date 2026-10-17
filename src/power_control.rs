@@ -22,6 +22,7 @@ use crate::{
 pub const TOKEN_ENV: &str = "NOALBS_POWER_TOKEN";
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const WAKE_TIMEOUT: Duration = Duration::from_secs(30);
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
 const WATCH_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const DEFAULT_COOLDOWN_SECS: u64 = 60;
@@ -224,8 +225,13 @@ impl PowerClient {
             platform: platform_name(platform),
         };
 
-        self.call(self.http.post(self.url("wake")).json(&body))
-            .await
+        let request = self
+            .http
+            .post(self.url("wake"))
+            .timeout(WAKE_TIMEOUT)
+            .json(&body);
+
+        self.call(request).await
     }
 
     /// Returns whether a pending stream start was cancelled.
