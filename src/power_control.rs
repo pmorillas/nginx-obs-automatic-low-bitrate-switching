@@ -403,8 +403,21 @@ pub enum GateAction {
     CancelStart,
 }
 
-/// Decides what a command that needs the broadcasting software does while it is not connected.
-pub fn gate(command: GatedCommand, status: &PowerStatus) -> GateAction {
+/// Decides what a command that needs the broadcasting software does, given the power state.
+pub fn gate(command: GatedCommand, status: &PowerStatus, obs_connected: bool) -> GateAction {
+    // OBS can already answer while the API is still preparing it for the stream it will start
+    match command {
+        GatedCommand::Stop if status.pending_start.is_some() => return GateAction::CancelStart,
+        GatedCommand::Start if status.power == Power::Starting => {
+            return GateAction::WakeWithStream { queued: true };
+        }
+        _ => {}
+    }
+
+    if obs_connected {
+        return GateAction::Proceed;
+    }
+
     match status.power {
         Power::On | Power::Unknown => GateAction::Proceed,
         Power::Unavailable => GateAction::Reply(Notice::Unavailable),
@@ -414,11 +427,21 @@ pub fn gate(command: GatedCommand, status: &PowerStatus) -> GateAction {
             GatedCommand::Stop => GateAction::Reply(Notice::StopWhileOff),
             GatedCommand::Other => GateAction::Reply(Notice::OffHint),
         },
-        Power::Starting => match command {
-            GatedCommand::Start => GateAction::WakeWithStream { queued: true },
-            GatedCommand::Stop if status.pending_start.is_some() => GateAction::CancelStart,
-            GatedCommand::Stop | GatedCommand::Other => GateAction::Reply(Notice::StartingWait),
-        },
+        Power::Starting => GateAction::Reply(Notice::StartingWait),
+    }
+}
+
+/// Reply for the `on` subcommand while OBS is connected (`None` status when the API was
+/// unreachable); `None` means asking the API to power it on anyway.
+pub fn obs_on_while_connected(status: Option<&PowerStatus>) -> Option<Notice> {
+    let Some(status) = status else {
+        return Some(Notice::AlreadyOn);
+    };
+
+    match status.power {
+        Power::Starting => Some(status_notice(status)),
+        Power::On | Power::Unknown => Some(Notice::AlreadyOn),
+        Power::Off | Power::Unavailable => None,
     }
 }
 
@@ -953,20 +976,25 @@ mod tests {
         }
     }
 
+    const ALL_COMMANDS: [GatedCommand; 3] =
+        [GatedCommand::Start, GatedCommand::Stop, GatedCommand::Other];
+
     #[test]
     fn gate_on_or_unknown_proceeds() {
         for power in [Power::On, Power::Unknown] {
-            for c in [GatedCommand::Start, GatedCommand::Stop, GatedCommand::Other] {
-                assert_eq!(gate(c, &status(power)), GateAction::Proceed);
+            for connected in [false, true] {
+                for c in ALL_COMMANDS {
+                    assert_eq!(gate(c, &status(power), connected), GateAction::Proceed);
+                }
             }
         }
     }
 
     #[test]
     fn gate_unavailable() {
-        for c in [GatedCommand::Start, GatedCommand::Stop, GatedCommand::Other] {
+        for c in ALL_COMMANDS {
             assert_eq!(
-                gate(c, &status(Power::Unavailable)),
+                gate(c, &status(Power::Unavailable), false),
                 GateAction::Reply(Notice::Unavailable)
             );
         }
@@ -976,15 +1004,15 @@ mod tests {
     fn gate_off() {
         let off = status(Power::Off);
         assert_eq!(
-            gate(GatedCommand::Start, &off),
+            gate(GatedCommand::Start, &off, false),
             GateAction::WakeWithStream { queued: false }
         );
         assert_eq!(
-            gate(GatedCommand::Stop, &off),
+            gate(GatedCommand::Stop, &off, false),
             GateAction::Reply(Notice::StopWhileOff)
         );
         assert_eq!(
-            gate(GatedCommand::Other, &off),
+            gate(GatedCommand::Other, &off, false),
             GateAction::Reply(Notice::OffHint)
         );
     }
@@ -996,8 +1024,8 @@ mod tests {
             ..status(Power::Off)
         };
 
-        for c in [GatedCommand::Start, GatedCommand::Stop, GatedCommand::Other] {
-            assert_eq!(gate(c, &off), GateAction::Reply(Notice::OffNoWake));
+        for c in ALL_COMMANDS {
+            assert_eq!(gate(c, &off, false), GateAction::Reply(Notice::OffNoWake));
         }
     }
 
@@ -1005,15 +1033,15 @@ mod tests {
     fn gate_starting() {
         let starting = status(Power::Starting);
         assert_eq!(
-            gate(GatedCommand::Start, &starting),
+            gate(GatedCommand::Start, &starting, false),
             GateAction::WakeWithStream { queued: true }
         );
         assert_eq!(
-            gate(GatedCommand::Stop, &starting),
+            gate(GatedCommand::Stop, &starting, false),
             GateAction::Reply(Notice::StartingWait)
         );
         assert_eq!(
-            gate(GatedCommand::Other, &starting),
+            gate(GatedCommand::Other, &starting, false),
             GateAction::Reply(Notice::StartingWait)
         );
 
@@ -1022,16 +1050,115 @@ mod tests {
             ..status(Power::Starting)
         };
         assert_eq!(
-            gate(GatedCommand::Stop, &with_pending),
+            gate(GatedCommand::Stop, &with_pending, false),
             GateAction::CancelStart
         );
         assert_eq!(
-            gate(GatedCommand::Start, &with_pending),
+            gate(GatedCommand::Start, &with_pending, false),
             GateAction::WakeWithStream { queued: true }
         );
         assert_eq!(
-            gate(GatedCommand::Other, &with_pending),
+            gate(GatedCommand::Other, &with_pending, false),
             GateAction::Reply(Notice::StartingWait)
+        );
+    }
+
+    #[test]
+    fn gate_connected_while_starting() {
+        for pending_start in [None, pending()] {
+            let starting = PowerStatus {
+                pending_start,
+                ..status(Power::Starting)
+            };
+            assert_eq!(
+                gate(GatedCommand::Start, &starting, true),
+                GateAction::WakeWithStream { queued: true }
+            );
+            assert_eq!(
+                gate(GatedCommand::Other, &starting, true),
+                GateAction::Proceed
+            );
+        }
+
+        let with_pending = PowerStatus {
+            pending_start: pending(),
+            ..status(Power::Starting)
+        };
+        assert_eq!(
+            gate(GatedCommand::Stop, &with_pending, true),
+            GateAction::CancelStart
+        );
+        assert_eq!(
+            gate(GatedCommand::Stop, &status(Power::Starting), true),
+            GateAction::Proceed
+        );
+    }
+
+    #[test]
+    fn gate_pending_start_is_cancelled_in_any_state() {
+        for power in [Power::Off, Power::Starting, Power::On, Power::Unavailable] {
+            for connected in [false, true] {
+                let s = PowerStatus {
+                    pending_start: pending(),
+                    ..status(power)
+                };
+                assert_eq!(
+                    gate(GatedCommand::Stop, &s, connected),
+                    GateAction::CancelStart,
+                    "{power:?} connected={connected}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn gate_connected_proceeds_otherwise() {
+        for power in [Power::Off, Power::On, Power::Unavailable, Power::Unknown] {
+            for c in ALL_COMMANDS {
+                assert_eq!(
+                    gate(c, &status(power), true),
+                    GateAction::Proceed,
+                    "{c:?} {power:?}"
+                );
+            }
+        }
+
+        let off_without_wake = PowerStatus {
+            wake_enabled: false,
+            ..status(Power::Off)
+        };
+        assert_eq!(
+            gate(GatedCommand::Start, &off_without_wake, true),
+            GateAction::Proceed
+        );
+    }
+
+    #[test]
+    fn obs_on_while_connected_replies() {
+        assert_eq!(obs_on_while_connected(None), Some(Notice::AlreadyOn));
+        assert_eq!(
+            obs_on_while_connected(Some(&status(Power::On))),
+            Some(Notice::AlreadyOn)
+        );
+        assert_eq!(
+            obs_on_while_connected(Some(&status(Power::Unknown))),
+            Some(Notice::AlreadyOn)
+        );
+        assert_eq!(
+            obs_on_while_connected(Some(&status(Power::Starting))),
+            Some(Notice::StatusStarting)
+        );
+        assert_eq!(
+            obs_on_while_connected(Some(&PowerStatus {
+                pending_start: pending(),
+                ..status(Power::Starting)
+            })),
+            Some(Notice::StatusStartingWithStream)
+        );
+        assert_eq!(obs_on_while_connected(Some(&status(Power::Off))), None);
+        assert_eq!(
+            obs_on_while_connected(Some(&status(Power::Unavailable))),
+            None
         );
     }
 

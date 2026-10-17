@@ -824,13 +824,14 @@ Optional. If OBS runs on a machine that gets powered off while idle (for example
 
 > If `powerControl` is set but no token is found, NOALBS logs a warning and power control stays disabled.
 
-While NOALBS is not connected to OBS:
+What changes in chat:
 
-- `!start` powers OBS on, and your API starts the stream once OBS is ready. NOALBS tells chat when the stream is live or if it couldn't be started
-- `!stop` cancels that automatic start while OBS is still powering on
-- Other commands that need OBS (`!switch`, `!live`, `!fix`, `!record`, ...) answer that OBS is off and how to power it on
+- `!start` while OBS is off powers it on, and your API starts the stream once OBS is ready. NOALBS tells chat when the stream is live or if it couldn't be started
+- `!start` while your API reports OBS as still powering on leaves the start to your API too, even if NOALBS is already connected to OBS
+- `!stop` cancels that automatic start as long as it hasn't happened yet, instead of stopping the stream
+- While OBS is off, other commands that need OBS (`!switch`, `!live`, `!fix`, `!record`, ...) answer that OBS is off and how to power it on
 - `!obs on` powers OBS on without starting the stream and `!obs status` shows its power state
-- If your API reports OBS as already on, NOALBS gives the OBS connection up to 15 seconds to come back before running the command as usual
+- If your API reports OBS as already on but NOALBS isn't connected yet, NOALBS gives the OBS connection up to 15 seconds to come back before running the command as usual
 
 > `!obs` is an Admin command by default and only exists when `powerControl` is set. Like any other command, its permission can be changed in `commands` with the `Obs` key.
 

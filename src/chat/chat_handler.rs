@@ -612,7 +612,7 @@ impl DispatchCommand {
         };
     }
 
-    /// Answers commands that need OBS while it is not connected; returns true when handled.
+    /// Answers commands that need OBS from its power state; returns true when handled.
     async fn power_gate(&self) -> bool {
         let Some(power) = &self.user.power_control else {
             return false;
@@ -622,7 +622,9 @@ impl DispatchCommand {
             return false;
         };
 
-        if self.obs_connected().await {
+        // Only !start and !stop can clash with a stream start the API still has to do
+        let connected = self.obs_connected().await;
+        if connected && kind == power_control::GatedCommand::Other {
             return false;
         }
 
@@ -634,8 +636,10 @@ impl DispatchCommand {
             }
         };
 
+        let action = power_control::gate(kind, &status, connected);
+
         // The OBS client may still be in its reconnect backoff right after OBS came up
-        if power_control::should_nudge(&status, false) {
+        if action == GateAction::Proceed && power_control::should_nudge(&status, connected) {
             self.user
                 .state
                 .read()
@@ -644,27 +648,24 @@ impl DispatchCommand {
                 .reconnect_notifier()
                 .notify_one();
 
-            let connected = power_control::wait_until(
+            let reconnected = power_control::wait_until(
                 power_control::RECONNECT_WAIT,
                 power_control::RECONNECT_POLL,
                 || self.obs_connected(),
             )
             .await;
 
-            debug!("OBS reconnected before running the command: {}", connected);
+            debug!("OBS reconnected before running the command: {}", reconnected);
         }
 
-        match power_control::gate(kind, &status) {
+        match action {
             GateAction::Proceed => false,
             GateAction::Reply(notice) => {
                 self.send_notice(notice).await;
                 true
             }
             GateAction::WakeWithStream { queued } => self.wake_with_stream(power, queued).await,
-            GateAction::CancelStart => {
-                self.cancel_start(power).await;
-                true
-            }
+            GateAction::CancelStart => self.cancel_start(power, connected).await,
         }
     }
 
@@ -691,20 +692,27 @@ impl DispatchCommand {
         true
     }
 
-    async fn cancel_start(&self, power: &PowerControl) {
-        let notice = match power.client().cancel_start(&self.chat_message.sender).await {
+    /// Returns false when the stop should still run as usual.
+    async fn cancel_start(&self, power: &PowerControl, connected: bool) -> bool {
+        let cancelled = power
+            .client()
+            .cancel_start(&self.chat_message.sender)
+            .await
+            .inspect_err(|e| warn!("Power control cancel request failed: {}", e));
+
+        let notice = match cancelled {
             Ok(true) => {
                 power.stop_watching().await;
                 Notice::StartCancelled
             }
+            // Nothing left to cancel, or no answer: OBS is up, so stop it as usual
+            _ if connected => return false,
             Ok(false) => Notice::StartingWait,
-            Err(e) => {
-                warn!("Power control cancel request failed: {}", e);
-                Notice::Error
-            }
+            Err(_) => Notice::Error,
         };
 
         self.send_notice(notice).await;
+        true
     }
 
     async fn obs(&self, subcommand: Option<&str>) {
@@ -730,7 +738,16 @@ impl DispatchCommand {
 
     async fn obs_on(&self, power: &PowerControl) -> Notice {
         if self.obs_connected().await {
-            return Notice::AlreadyOn;
+            let status = power
+                .client()
+                .status()
+                .await
+                .inspect_err(|e| warn!("Power control status unavailable: {}", e))
+                .ok();
+
+            if let Some(notice) = power_control::obs_on_while_connected(status.as_ref()) {
+                return notice;
+            }
         }
 
         let response = self.wake(power, false).await;
