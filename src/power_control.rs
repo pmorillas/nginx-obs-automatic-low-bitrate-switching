@@ -26,6 +26,9 @@ const WAKE_TIMEOUT: Duration = Duration::from_secs(30);
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
 const WATCH_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const DEFAULT_COOLDOWN_SECS: u64 = 60;
+/// Once OBS is on, a chat power on older than this was already answered before the restart.
+const RESUME_WHEN_ON_SECS: u64 = 90;
+const RESUME_ATTEMPTS: u32 = 3;
 
 /// How long a command waits for OBS to reconnect when the API reports it on.
 pub const RECONNECT_WAIT: Duration = Duration::from_secs(15);
@@ -109,6 +112,19 @@ pub struct PowerStatus {
     pub last_start: Option<LastStart>,
     #[serde(default, deserialize_with = "lenient_u64")]
     pub idle_shutdown_minutes: Option<u64>,
+    #[serde(default)]
+    pub chat_wake: Option<ChatWake>,
+}
+
+/// The last power on requested from chat, while it can still be in flight.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatWake {
+    #[serde(default, deserialize_with = "lenient_u64")]
+    pub seconds_ago: Option<u64>,
+    /// The stream start that power on is serving, if any.
+    #[serde(default)]
+    pub start_request_id: Option<String>,
 }
 
 /// A stream start waiting for the broadcasting software to be ready.
@@ -558,6 +574,39 @@ pub fn watcher_step(
     WatcherEvent::Wait
 }
 
+/// What to keep watching for after NOALBS (re)started; `None` when nothing from chat is in flight.
+///
+/// Powering OBS on can restart NOALBS too (a config change rolls its pod), which loses the
+/// watcher started by the chat command.
+pub fn resume_goal(status: &PowerStatus) -> Option<Goal> {
+    // Only chat asks for a pending start
+    if status.power == Power::Starting
+        && let Some(pending) = &status.pending_start
+    {
+        return Some(Goal::Stream {
+            request_id: pending.request_id.clone(),
+        });
+    }
+
+    let wake = status.chat_wake.as_ref()?;
+    let recent = wake
+        .seconds_ago
+        .is_some_and(|secs| secs <= RESUME_WHEN_ON_SECS);
+
+    match status.power {
+        Power::Starting => {}
+        Power::On if recent => {}
+        _ => return None,
+    }
+
+    Some(match &wake.start_request_id {
+        Some(id) => Goal::Stream {
+            request_id: Some(id.clone()),
+        },
+        None => Goal::PowerOnly,
+    })
+}
+
 /// Whether the broadcasting software should retry connecting right away.
 pub fn should_nudge(status: &PowerStatus, obs_connected: bool) -> bool {
     status.power == Power::On && !obs_connected
@@ -690,6 +739,32 @@ impl PowerControl {
     pub async fn stop_watching(&self) {
         self.watcher.lock().await.active = None;
     }
+
+    /// Picks up a chat power on that was in flight when NOALBS started.
+    pub async fn resume(&self, ctx: WatchContext) {
+        let mut status = None;
+
+        for attempt in 1..=RESUME_ATTEMPTS {
+            match self.client.status().await {
+                Ok(s) => {
+                    status = Some(s);
+                    break;
+                }
+                Err(e) => debug!("Power status on startup failed ({}): {}", attempt, e),
+            }
+
+            if attempt < RESUME_ATTEMPTS {
+                time::sleep(POLL_INTERVAL).await;
+            }
+        }
+
+        let Some(goal) = status.as_ref().and_then(resume_goal) else {
+            return;
+        };
+
+        info!("Resuming the power watcher after a restart: {:?}", goal);
+        self.watch(goal, ctx).await;
+    }
 }
 
 async fn run_watcher(
@@ -779,7 +854,15 @@ mod tests {
             pending_start: None,
             last_start: None,
             idle_shutdown_minutes: Some(30),
+            chat_wake: None,
         }
+    }
+
+    fn chat_wake(seconds_ago: u64, start_request_id: Option<&str>) -> Option<ChatWake> {
+        Some(ChatWake {
+            seconds_ago: Some(seconds_ago),
+            start_request_id: start_request_id.map(str::to_owned),
+        })
     }
 
     fn pending() -> Option<PendingStart> {
@@ -843,6 +926,105 @@ mod tests {
         assert_eq!(s.pending_start, None);
         assert_eq!(s.last_start, None);
         assert_eq!(s.idle_shutdown_minutes, None);
+        assert_eq!(s.chat_wake, None);
+    }
+
+    #[test]
+    fn parses_chat_wake() {
+        let s: PowerStatus = serde_json::from_str(
+            r#"{ "power": "starting", "chatWake": { "secondsAgo": 12.4, "startRequestId": "req-1" } }"#,
+        )
+        .unwrap();
+        assert_eq!(s.chat_wake, chat_wake(13, Some("req-1")));
+
+        let s: PowerStatus = serde_json::from_str(r#"{ "power": "on", "chatWake": {} }"#).unwrap();
+        assert_eq!(
+            s.chat_wake,
+            Some(ChatWake {
+                seconds_ago: None,
+                start_request_id: None
+            })
+        );
+    }
+
+    #[test]
+    fn resume_pending_start_while_starting() {
+        let s = PowerStatus {
+            pending_start: pending(),
+            ..status(Power::Starting)
+        };
+        assert_eq!(resume_goal(&s), Some(stream_goal("req-1")));
+    }
+
+    #[test]
+    fn resume_chat_wake_while_starting() {
+        let power_only = PowerStatus {
+            chat_wake: chat_wake(600, None),
+            ..status(Power::Starting)
+        };
+        assert_eq!(resume_goal(&power_only), Some(Goal::PowerOnly));
+
+        let stream = PowerStatus {
+            chat_wake: chat_wake(600, Some("req-2")),
+            ..status(Power::Starting)
+        };
+        assert_eq!(resume_goal(&stream), Some(stream_goal("req-2")));
+    }
+
+    #[test]
+    fn resume_ignores_wakes_not_from_chat() {
+        for power in [Power::Starting, Power::On] {
+            assert_eq!(resume_goal(&status(power)), None, "{power:?}");
+        }
+    }
+
+    #[test]
+    fn resume_once_on_only_right_after_the_wake() {
+        let recent = PowerStatus {
+            chat_wake: chat_wake(RESUME_WHEN_ON_SECS, Some("req-1")),
+            ..status(Power::On)
+        };
+        assert_eq!(resume_goal(&recent), Some(stream_goal("req-1")));
+
+        for wake in [
+            chat_wake(RESUME_WHEN_ON_SECS + 1, Some("req-1")),
+            Some(ChatWake {
+                seconds_ago: None,
+                start_request_id: None,
+            }),
+        ] {
+            let s = PowerStatus {
+                chat_wake: wake,
+                ..status(Power::On)
+            };
+            assert_eq!(resume_goal(&s), None);
+        }
+    }
+
+    #[test]
+    fn resume_nothing_when_off() {
+        for power in [Power::Off, Power::Unavailable, Power::Unknown] {
+            let s = PowerStatus {
+                pending_start: pending(),
+                chat_wake: chat_wake(5, Some("req-1")),
+                ..status(power)
+            };
+            assert_eq!(resume_goal(&s), None, "{power:?}");
+        }
+    }
+
+    #[test]
+    fn resumed_stream_goal_reports_a_start_resolved_during_the_restart() {
+        let s = PowerStatus {
+            chat_wake: chat_wake(40, Some("req-1")),
+            last_start: last_start("req-1", StartResult::Failed),
+            ..status(Power::On)
+        };
+        let goal = resume_goal(&s).unwrap();
+        assert_eq!(
+            watcher_step(&goal, &s, false, true),
+            WatcherEvent::Done(Some(Notice::StartFailed))
+        );
     }
 
     #[test]

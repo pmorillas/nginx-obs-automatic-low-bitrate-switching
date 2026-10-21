@@ -138,6 +138,59 @@ impl ChatHandler {
         self.chat_senders.insert(platform, connection);
     }
 
+    /// Keeps answering chat power ons that were in flight when NOALBS started.
+    pub async fn resume_power_watchers(&self) {
+        let users: Vec<Arc<Noalbs>> = self
+            .user_manager
+            .get()
+            .read()
+            .await
+            .values()
+            .cloned()
+            .collect();
+
+        for user in users {
+            if user.power_control.is_none() {
+                continue;
+            }
+
+            let (channel, platform, lang, prefix, reconnect) = {
+                let state = user.state.read().await;
+                let Some(chat) = &state.config.chat else {
+                    continue;
+                };
+
+                (
+                    // Same login the channel was joined with
+                    chat.username.to_lowercase(),
+                    chat.platform.kind(),
+                    chat.language.to_string(),
+                    chat.prefix.clone(),
+                    state.broadcasting_software.reconnect_notifier(),
+                )
+            };
+
+            let Some(chat_sender) = self.chat_senders.get(&platform) else {
+                continue;
+            };
+
+            let ctx = WatchContext {
+                chat_sender: chat_sender.clone(),
+                channel,
+                lang,
+                prefix,
+                state: Arc::downgrade(&user.state),
+                reconnect,
+            };
+
+            tokio::spawn(async move {
+                if let Some(power) = &user.power_control {
+                    power.resume(ctx).await;
+                }
+            });
+        }
+    }
+
     pub async fn handle_messages(&mut self) {
         while let Some(message) = self.chat_handler_rx.recv().await {
             debug!("Handle this message: {:?}", message);
