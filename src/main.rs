@@ -90,6 +90,8 @@ async fn main() -> Result<()> {
         chat_handler.add_chat_sender(ChatPlatform::Kick, Arc::new(kick));
     }
 
+    chat_handler.resume_power_watchers().await;
+
     tokio::task::spawn(async move {
         chat_handler.handle_messages().await;
     });
@@ -100,14 +102,37 @@ async fn main() -> Result<()> {
         webserver.run().await;
     }
 
-    match signal::ctrl_c().await {
-        Ok(()) => {}
-        Err(err) => {
-            eprintln!("Unable to listen for shutdown signal: {}", err);
+    shutdown_signal().await;
+
+    Ok(())
+}
+
+/// Waits for Ctrl+C, or SIGTERM on unix: as a container's PID 1 NOALBS would otherwise
+/// ignore SIGTERM and only go away when killed after the grace period.
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use signal::unix::{SignalKind, signal};
+
+        match signal(SignalKind::terminate()) {
+            Ok(mut terminate) => {
+                tokio::select! {
+                    res = signal::ctrl_c() => {
+                        if let Err(err) = res {
+                            eprintln!("Unable to listen for shutdown signal: {}", err);
+                        }
+                    }
+                    _ = terminate.recv() => {}
+                }
+                return;
+            }
+            Err(err) => eprintln!("Unable to listen for SIGTERM: {}", err),
         }
     }
 
-    Ok(())
+    if let Err(err) = signal::ctrl_c().await {
+        eprintln!("Unable to listen for shutdown signal: {}", err);
+    }
 }
 
 pub async fn load_user_from_file<P>(
