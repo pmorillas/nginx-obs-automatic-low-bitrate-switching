@@ -159,6 +159,10 @@ pub struct Chat {
     pub enable_auto_stop_stream_on_host_or_raid: bool,
     pub announce_raid_on_auto_stop: bool,
     pub commands: Option<HashMap<chat::Command, CommandInfo>>,
+
+    /// Reply to the public `!setup` command, which only exists when this is set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub setup_reply: Option<String>,
 }
 
 impl Default for Chat {
@@ -175,6 +179,7 @@ impl Default for Chat {
             enable_auto_stop_stream_on_host_or_raid: true,
             announce_raid_on_auto_stop: true,
             commands: None,
+            setup_reply: None,
         }
     }
 }
@@ -686,5 +691,32 @@ mod tests {
     fn null_power_control_is_disabled() {
         let config = with_power_control(serde_json::Value::Null);
         assert!(config.power_control.is_none());
+    }
+
+    #[test]
+    fn config_without_setup_reply() {
+        let config: Config = serde_json::from_str(EXAMPLE).unwrap();
+        assert_eq!(config.chat.as_ref().unwrap().setup_reply, None);
+
+        let saved = serde_json::to_string_pretty(&config).unwrap();
+        assert!(!saved.contains("setupReply"));
+    }
+
+    #[test]
+    fn config_with_setup_reply() {
+        let mut value: serde_json::Value = serde_json::from_str(EXAMPLE).unwrap();
+        value["chat"]["setupReply"] = "Runs on Example. https://example.com/?ref=ABC".into();
+        let config: Config = serde_json::from_value(value).unwrap();
+
+        assert_eq!(
+            config.chat.as_ref().unwrap().setup_reply.as_deref(),
+            Some("Runs on Example. https://example.com/?ref=ABC")
+        );
+
+        let saved = serde_json::to_value(&config).unwrap();
+        assert_eq!(
+            saved["chat"]["setupReply"],
+            "Runs on Example. https://example.com/?ref=ABC"
+        );
     }
 }

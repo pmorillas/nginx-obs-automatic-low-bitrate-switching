@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use rust_i18n::t;
 use serde::{Deserialize, Serialize};
@@ -15,12 +16,15 @@ use crate::power_control::{
 use crate::state::ClientStatus;
 use crate::{Noalbs, config, error, events, switcher, user_manager};
 
+const SETUP_COOLDOWN: Duration = Duration::from_secs(60);
+
 pub struct ChatHandler {
     chat_handler_rx: mpsc::Receiver<super::HandleMessage>,
     user_manager: user_manager::UserManager,
     chat_senders: HashMap<chat::ChatPlatform, Arc<dyn chat::ChatLogic>>,
 
     timeouts: HashMap<chat::ChatPlatform, Vec<Timeout>>,
+    setup_cooldown: Cooldown,
     default_commands: HashMap<chat::Command, config::CommandInfo>,
 }
 
@@ -39,6 +43,7 @@ impl ChatHandler {
             chat_senders: HashMap::new(),
             default_commands: Self::default_command_settings(),
             timeouts,
+            setup_cooldown: Cooldown::new(SETUP_COOLDOWN),
         }
     }
 
@@ -260,9 +265,11 @@ impl ChatHandler {
 
         let (command, permission) = self.get_command(&user, &msg).await?;
 
-        if !self
-            .is_allowed_to_use_command(&user, &msg, &permission)
-            .await?
+        // Anyone may ask for the setup: the streamer opted in by configuring the reply
+        if command != chat::Command::Setup
+            && !self
+                .is_allowed_to_use_command(&user, &msg, &permission)
+                .await?
         {
             debug!("{} not allowed to use command {:?}", msg.sender, command);
             return None;
@@ -272,6 +279,15 @@ impl ChatHandler {
             && self.handle_timeout(&msg.platform, &msg.channel).await
         {
             debug!("Timeout");
+            return None;
+        }
+
+        if command == chat::Command::Setup
+            && !self
+                .setup_cooldown
+                .try_start(&msg.platform, &msg.channel, Instant::now())
+        {
+            debug!("Setup cooldown");
             return None;
         }
 
@@ -487,10 +503,19 @@ impl ChatHandler {
     }
 }
 
-/// Parses a command name; `obs` is only a command when the config has a `powerControl` section.
+/// Parses a command name; `obs` is only a command when the config has a `powerControl` section,
+/// and `setup` when the chat has a `setupReply`.
 fn parse_command(name: &str, config: &config::Config) -> chat::Command {
     match chat::Command::from(name) {
         chat::Command::Obs if config.power_control.is_none() => {
+            chat::Command::Unknown(name.to_lowercase())
+        }
+        chat::Command::Setup
+            if config
+                .chat
+                .as_ref()
+                .is_none_or(|chat| chat.setup_reply.is_none()) =>
+        {
             chat::Command::Unknown(name.to_lowercase())
         }
         command => command,
@@ -662,7 +687,23 @@ impl DispatchCommand {
             }
             chat::Command::Collection => self.collection(params.next()).await,
             chat::Command::Obs => self.obs(params.next()).await,
+            chat::Command::Setup => self.setup().await,
         };
+    }
+
+    async fn setup(&self) {
+        let reply = {
+            let state = self.user.state.read().await;
+            state
+                .config
+                .chat
+                .as_ref()
+                .and_then(|c| c.setup_reply.clone())
+        };
+
+        if let Some(reply) = reply {
+            self.send(reply).await;
+        }
     }
 
     /// Answers commands that need OBS from its power state; returns true when handled.
@@ -1855,6 +1896,35 @@ pub struct Timeout {
     pub time: std::time::Instant,
 }
 
+/// Lets a command answer at most once per period in each channel.
+struct Cooldown {
+    period: Duration,
+    last: HashMap<(chat::ChatPlatform, String), Instant>,
+}
+
+impl Cooldown {
+    fn new(period: Duration) -> Self {
+        Self {
+            period,
+            last: HashMap::new(),
+        }
+    }
+
+    /// Starts a new period and returns true unless the channel is still in one.
+    fn try_start(&mut self, platform: &chat::ChatPlatform, channel: &str, now: Instant) -> bool {
+        let key = (platform.to_owned(), channel.to_lowercase());
+
+        if let Some(last) = self.last.get(&key)
+            && now.duration_since(*last) < self.period
+        {
+            return false;
+        }
+
+        self.last.insert(key, now);
+        true
+    }
+}
+
 const CLIENT_ID: &str = "kimne78kx3ncx6brgo4mv6wki5h1ko";
 const USHER_BASE: &str = "https://usher.ttvnw.net";
 const GQL_BASE: &str = "https://gql.twitch.tv/gql";
@@ -1927,4 +1997,47 @@ struct M3u8Query {
 struct StreamPlaybackAccessToken {
     value: String,
     signature: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const EXAMPLE: &str = include_str!("../../config.json");
+
+    fn config_with_setup_reply(reply: Option<&str>) -> config::Config {
+        let mut value: serde_json::Value = serde_json::from_str(EXAMPLE).unwrap();
+        if let Some(reply) = reply {
+            value["chat"]["setupReply"] = reply.into();
+        }
+        serde_json::from_value(value).unwrap()
+    }
+
+    #[test]
+    fn setup_is_unknown_without_a_reply() {
+        let config = config_with_setup_reply(None);
+        assert_eq!(
+            parse_command("setup", &config),
+            chat::Command::Unknown("setup".to_string())
+        );
+    }
+
+    #[test]
+    fn setup_is_a_command_with_a_reply() {
+        let config = config_with_setup_reply(Some("Runs on Example"));
+        assert_eq!(parse_command("SETUP", &config), chat::Command::Setup);
+    }
+
+    #[test]
+    fn cooldown_answers_once_per_period_and_channel() {
+        let mut cooldown = Cooldown::new(Duration::from_secs(60));
+        let start = Instant::now();
+        let twitch = chat::ChatPlatform::Twitch;
+
+        assert!(cooldown.try_start(&twitch, "Channel", start));
+        assert!(!cooldown.try_start(&twitch, "channel", start + Duration::from_secs(59)));
+        assert!(cooldown.try_start(&twitch, "other", start + Duration::from_secs(1)));
+        assert!(cooldown.try_start(&chat::ChatPlatform::Kick, "channel", start));
+        assert!(cooldown.try_start(&twitch, "channel", start + Duration::from_secs(60)));
+    }
 }

@@ -28,6 +28,7 @@
 |     MODs     | !fix                      | tries to fix the stream.                                                                                | !fix                  |
 |     MODs     | !refresh                  | tries to fix the stream.                                                                                | !refresh              |
 |    Public    | !bitrate                  | returns the current bitrate.                                                                            | !bitrate              |
+|    Public    | !setup                    | replies with the configured `setupReply`, at most once a minute per channel.                            | !setup                |
 
 You can also enable/disable certain features from chat, see below:
 
