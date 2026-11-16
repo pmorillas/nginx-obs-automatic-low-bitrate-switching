@@ -236,6 +236,27 @@ impl ChatHandler {
             .get_user_by_chat_platform(&ss.channel, &ss.platform)
             .await?;
         let lang = &user.chat_language().await.unwrap().to_string();
+
+        // Read and release the state before sending: the send path must never wait on it
+        let switch_messages = {
+            let state = user.state.read().await;
+            state
+                .config
+                .chat
+                .as_ref()
+                .and_then(|c| c.switch_messages.clone())
+        };
+
+        if let Some(switch_messages) = switch_messages {
+            let (mut msg, stats) = switch_messages.for_switch(&ss.switch_type)?;
+            if stats {
+                let bitrate = bitrate_msg(&user, lang).await;
+                let _ = write!(msg, " | {}", bitrate);
+            }
+            sender.send_message(ss.channel, msg).await;
+            return Some(());
+        }
+
         let mut msg = t!("sceneSwitch.switch", locale = lang, scene = &ss.scene);
 
         use switcher::SwitchType::*;

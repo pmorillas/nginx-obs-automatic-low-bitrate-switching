@@ -163,6 +163,37 @@ pub struct Chat {
     /// Reply to the public `!setup` command, which only exists when this is set.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub setup_reply: Option<String>,
+
+    /// Messages for automatic scene switches, sent instead of the default notice.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub switch_messages: Option<SwitchMessages>,
+}
+
+/// Chat messages for automatic scene switches. A switch without a message stays silent.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SwitchMessages {
+    pub normal: Option<String>,
+    pub low: Option<String>,
+    pub offline: Option<String>,
+    /// Append the bitrate on normal and low switches, like the default notice.
+    pub stats: bool,
+}
+
+impl SwitchMessages {
+    /// The message for a switch and whether to append the bitrate, or `None` to stay silent.
+    pub fn for_switch(&self, switch_type: &switcher::SwitchType) -> Option<(String, bool)> {
+        use switcher::SwitchType::*;
+        let (text, stats) = match switch_type {
+            Normal => (&self.normal, self.stats),
+            Low => (&self.low, self.stats),
+            Offline => (&self.offline, false),
+            Previous => (&None, false),
+        };
+        text.as_ref()
+            .filter(|t| !t.trim().is_empty())
+            .map(|t| (t.to_owned(), stats))
+    }
 }
 
 impl Default for Chat {
@@ -180,6 +211,7 @@ impl Default for Chat {
             announce_raid_on_auto_stop: true,
             commands: None,
             setup_reply: None,
+            switch_messages: None,
         }
     }
 }
@@ -718,5 +750,74 @@ mod tests {
             saved["chat"]["setupReply"],
             "Runs on Example. https://example.com/?ref=ABC"
         );
+    }
+
+    #[test]
+    fn config_without_switch_messages() {
+        let config: Config = serde_json::from_str(EXAMPLE).unwrap();
+        assert_eq!(config.chat.as_ref().unwrap().switch_messages, None);
+
+        let saved = serde_json::to_string_pretty(&config).unwrap();
+        assert!(!saved.contains("switchMessages"));
+    }
+
+    #[test]
+    fn config_with_switch_messages() {
+        let mut value: serde_json::Value = serde_json::from_str(EXAMPLE).unwrap();
+        value["chat"]["switchMessages"] =
+            serde_json::json!({ "normal": "Back live", "low": "Signal is weak", "stats": true });
+        let config: Config = serde_json::from_value(value).unwrap();
+
+        let messages = config
+            .chat
+            .as_ref()
+            .unwrap()
+            .switch_messages
+            .clone()
+            .unwrap();
+        assert_eq!(
+            messages,
+            SwitchMessages {
+                normal: Some("Back live".to_string()),
+                low: Some("Signal is weak".to_string()),
+                offline: None,
+                stats: true,
+            }
+        );
+
+        let saved = serde_json::to_value(&config).unwrap();
+        assert_eq!(saved["chat"]["switchMessages"]["low"], "Signal is weak");
+    }
+
+    #[test]
+    fn switch_messages_per_switch_type() {
+        use switcher::SwitchType::*;
+        let messages = SwitchMessages {
+            normal: Some("Back live".to_string()),
+            low: Some("Signal is weak".to_string()),
+            offline: Some("Lost signal".to_string()),
+            stats: true,
+        };
+
+        assert_eq!(
+            messages.for_switch(&Normal),
+            Some(("Back live".to_string(), true))
+        );
+        assert_eq!(
+            messages.for_switch(&Low),
+            Some(("Signal is weak".to_string(), true))
+        );
+        assert_eq!(
+            messages.for_switch(&Offline),
+            Some(("Lost signal".to_string(), false))
+        );
+        assert_eq!(messages.for_switch(&Previous), None);
+
+        let silent = SwitchMessages {
+            low: Some("  ".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(silent.for_switch(&Low), None);
+        assert_eq!(silent.for_switch(&Normal), None);
     }
 }
